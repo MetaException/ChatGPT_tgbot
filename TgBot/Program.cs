@@ -3,58 +3,36 @@ using ChatGPT.Net.DTO;
 using ChatGPT.Net.Enums;
 using ChatGPT.Net.Session;
 using Telegram.Bot;
-using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
 
 namespace TgBot
 {
     internal class Program
     {
-        private static ITelegramBotClient bot;
-        private static ChatGpt chatGpt;
-        private static string conversationId = "a-unique-string-id"; //We have only free version
-        private static ChatGptClient chatGptClient;
+        private static ITelegramBotClient bot = new TelegramBotClient(Configuration.BotToken);
 
-        internal class QueueElement
+        private static ChatGpt chatGpt = new ChatGpt(new ChatGptConfig
         {
-            public Message message;
-            public string prompt;
-        }
+            UseCache = true
+        });
 
-        private static Queue<QueueElement> msg_queue = new Queue<QueueElement>();
+        private static ChatGptClient chatGptClient = chatGpt.CreateClient(new ChatGptClientConfig
+        {
+            SessionToken = Configuration.ChatGptApiKey,
+            AccountType = AccountType.Free
+        }).Result;
+
+        private static string conversationId = "a-unique-string-id"; //Добавить разделение на беседы
+
+        private static readonly Queue<Message> msg_queue = new Queue<Message>();
 
         private static void Main(string[] args)
         {
-            bot = new TelegramBotClient(Configuration.BotToken);
-
             Console.WriteLine("Запущен бот " + bot.GetMeAsync().Result.FirstName);
 
-            chatGpt = new ChatGpt(new ChatGptConfig
-            {
-                UseCache = true
-            });
+            bot.StartReceiving(HandleUpdateAsync, HandleErrorAsync);
 
-            chatGptClient = chatGpt.CreateClient(new ChatGptClientConfig
-            {
-                SessionToken = Configuration.ChatGptApiKey,
-                AccountType = AccountType.Free
-            }).Result;
-
-            var cts = new CancellationTokenSource();
-            var cancellationToken = cts.Token;
-            var receiverOptions = new ReceiverOptions
-            {
-                AllowedUpdates = { }, // receive all update types
-            };
-
-            bot.ReceiveAsync(
-                HandleUpdateAsync,
-                HandleErrorAsync,
-                receiverOptions,
-                cancellationToken
-            );
-
-            QueueProc();
+            _ = QueueProc();
 
             Console.ReadLine();
         }
@@ -63,40 +41,33 @@ namespace TgBot
         {
             while (true)
             {
-                if (msg_queue.Count > 0)
+                if (msg_queue.TryDequeue(out var item))
                 {
-                    var msg = msg_queue.Dequeue();
-                    await Task.Run(() => QueueMessageProc(bot, msg));
+                    await QueueMessageProc(bot, item);
                 }
                 await Task.Delay(1000);
             }
         }
 
-        public static async Task QueueMessageProc(ITelegramBotClient botClient, QueueElement element)
+        public static async Task QueueMessageProc(ITelegramBotClient botClient, Message message)
         {
             await chatGpt.WaitForReady();
             string response = "";
-
-            for (int i = 0; ; i++)
+            try
             {
-                try { response = await chatGptClient.Ask(element.prompt, conversationId); }
-                catch { Console.WriteLine("Неизвестная ошибка получения ответа"); }
-
-                if (!string.IsNullOrWhiteSpace(response))
-                    break;
-
-                if (i > 50)
-                    Environment.Exit(102);
+                response = chatGptClient.Ask(message.ReplyToMessage.Text, conversationId).Result;
+            }
+            catch
+            {
+                msg_queue.Enqueue(message);
             }
 
             Console.WriteLine(Newtonsoft.Json.JsonConvert.SerializeObject(response));
-            await botClient.EditMessageTextAsync(element.message.Chat.Id, element.message.MessageId, response);
+            await botClient.EditMessageTextAsync(message.Chat.Id, message.MessageId, response);
         }
 
         public static async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
         {
-            // Некоторые действия
-            //лог
             Console.WriteLine(Newtonsoft.Json.JsonConvert.SerializeObject(update));
 
             if (update.Type == Telegram.Bot.Types.Enums.UpdateType.Message)
@@ -115,12 +86,8 @@ namespace TgBot
                     default:
                         await botClient.SendChatActionAsync(message.Chat.Id, Telegram.Bot.Types.Enums.ChatAction.Typing);
                         var sended_msg = await botClient.SendTextMessageAsync(message.Chat.Id, "⏳ Ожидайте ответ...", replyToMessageId: message.MessageId);
-                        QueueElement element = new QueueElement
-                        {
-                            message = sended_msg,
-                            prompt = message.Text
-                        };
-                        msg_queue.Enqueue(element);
+                        Console.WriteLine(Newtonsoft.Json.JsonConvert.SerializeObject(sended_msg));
+                        msg_queue.Enqueue(sended_msg);
                         break;
                 }
             }
