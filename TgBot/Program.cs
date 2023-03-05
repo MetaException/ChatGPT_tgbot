@@ -22,8 +22,6 @@ namespace TgBot
             AccountType = AccountType.Free
         }).Result;
 
-        private static string conversationId = "a-unique-string-id"; //Добавить разделение на беседы
-
         private static readonly Queue<Message> msg_queue = new Queue<Message>();
 
         private static void Main(string[] args)
@@ -55,7 +53,7 @@ namespace TgBot
             string response = "";
             try
             {
-                response = chatGptClient.Ask(message.ReplyToMessage.Text, conversationId).Result;
+                response = chatGptClient.Ask(message.ReplyToMessage.Text, message.ReplyToMessage.Chat.Id.ToString()).Result;
             }
             catch
             {
